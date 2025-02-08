@@ -210,6 +210,15 @@ class SubtitleTranslatorApp:
         )
         browse_button.pack(side="left", padx=5)
         
+        # Add Show Files button
+        self.show_files_button = ctk.CTkButton(
+            file_selection_frame,
+            text="Show Files",
+            command=self.show_selected_files,
+            width=100
+        )
+        self.show_files_button.pack(side="left", padx=5)
+        
         # Batch info frame
         self.batch_frame = ctk.CTkFrame(file_section)
         batch_info_label = ctk.CTkLabel(
@@ -220,7 +229,11 @@ class SubtitleTranslatorApp:
         
         # Only show batch frame if in batch mode
         if self.batch_mode.get():
-            self.batch_frame.pack(fill="x", pady=5)
+            self.batch_progress_frame.pack(fill="x", pady=(0, 5))
+            self.batch_frame.pack(after=self.file_frame)
+        else:
+            # Keep batch progress frame for multiple files in single mode
+            self.batch_frame.pack_forget()
         
         add_section_separator()
         
@@ -633,16 +646,17 @@ class SubtitleTranslatorApp:
     def toggle_mode(self):
         """Toggle between single file and batch mode"""
         is_batch = self.batch_mode.get()
-        self.path_label.configure(text="Folder:" if is_batch else "Files:")  # Changed to "Files:" for clarity
+        self.path_label.configure(text="Folder:" if is_batch else "Selected Files:")  # Updated text
         self.file_path_var.set("")  # Clear path
         self.batch_info_var.set("")
         self.batch_queue = []  # Clear batch queue
         
+        # Always show batch frame for multiple files
         if is_batch:
             self.batch_progress_frame.pack(fill="x", pady=(0, 5))
             self.batch_frame.pack(after=self.file_frame)
         else:
-            self.batch_progress_frame.pack_forget()
+            # Keep batch progress frame for multiple files in single mode
             self.batch_frame.pack_forget()
             
     def browse_path(self):
@@ -668,10 +682,18 @@ class SubtitleTranslatorApp:
             if file_paths:
                 # Convert tuple to list for batch processing
                 self.batch_queue = list(file_paths)
-                # Show first file in the entry
+                # Show first file in the entry and total count
                 self.file_path_var.set(self.batch_queue[0])
-                # Update batch info
-                self.batch_info_var.set(f"Selected {len(self.batch_queue)} files to process")
+                # Update batch info with file count and first file name
+                first_file = os.path.basename(self.batch_queue[0])
+                if len(self.batch_queue) > 1:
+                    self.batch_info_var.set(f"Selected {len(self.batch_queue)} files. First file: {first_file}")
+                    # Show batch progress frame for multiple files
+                    self.batch_progress_frame.pack(fill="x", pady=(0, 5))
+                else:
+                    self.batch_info_var.set(f"Selected file: {first_file}")
+                    self.batch_progress_frame.pack_forget()
+                
                 self.batch_frame.pack(fill="x", pady=5)
                 # Check first file type
                 self.check_file_type(self.batch_queue[0])
@@ -1279,23 +1301,26 @@ class SubtitleTranslatorApp:
             self.time_adjustment.set(str(ms))
             
     def apply_time_adjustment(self):
-        """Apply time adjustment to current subtitle file"""
+        """Apply time adjustment to current subtitle file(s)"""
         try:
-            if not self.file_path_var.get():
-                self.show_error("Please select a subtitle file first")
+            if not self.file_path_var.get() and not self.batch_queue:
+                self.show_error("Please select subtitle file(s) first")
                 return
                 
             time_shift = int(self.time_adjustment.get() or 0)
             if time_shift == 0:
                 return
-                
-            file_path = self.file_path_var.get()
-            if not file_path.lower().endswith('.srt'):
-                self.show_error("Please select an SRT subtitle file")
-                return
-                
-            # Create a subtitle processor if not exists
-            if not self.subtitle_processor:
+            
+            # Process all files in batch queue
+            files_to_process = self.batch_queue if self.batch_queue else [self.file_path_var.get()]
+            total_adjusted = 0
+            
+            for file_path in files_to_process:
+                if not file_path.lower().endswith('.srt'):
+                    logger.warning(f"Skipping non-SRT file: {file_path}")
+                    continue
+                    
+                # Create a subtitle processor if not exists
                 self.subtitle_processor = SubtitleProcessor(
                     file_path,
                     self.translator,
@@ -1304,14 +1329,65 @@ class SubtitleTranslatorApp:
                     self.update_status
                 )
                 
-            # Apply the time adjustment
-            if self.subtitle_processor.adjust_timing(file_path, time_shift):
-                self.flash_status(f"✅ Adjusted subtitle timing by {time_shift}ms")
-            else:
-                self.show_error("Failed to adjust subtitle timing")
-                
+                # Apply the time adjustment
+                if self.subtitle_processor.adjust_timing(file_path, time_shift):
+                    total_adjusted += 1
+                    self.update_status(f"Adjusted timing for {os.path.basename(file_path)}")
+                else:
+                    self.show_error(f"Failed to adjust timing for {os.path.basename(file_path)}")
+            
+            if total_adjusted > 0:
+                self.flash_status(f"✅ Adjusted {total_adjusted} file(s) by {time_shift}ms")
+            
         except Exception as e:
             self.show_error("Error adjusting subtitle timing", e)
+
+    def show_selected_files(self):
+        """Show a popup with the list of selected files"""
+        if not self.batch_queue:
+            self.show_error("No files selected")
+            return
+            
+        # Create popup window
+        popup = tk.Toplevel(self.root)
+        popup.title("Selected Files")
+        popup.geometry("600x400")
+        popup.configure(bg=Colors.FRAME_BG)
+        
+        # Center the popup
+        popup.transient(self.root)
+        popup.grab_set()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 600) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 400) // 2
+        popup.geometry(f"+{x}+{y}")
+        
+        # Add scrollable text widget
+        text_frame = ctk.CTkFrame(popup, fg_color=Colors.FRAME_BG)
+        text_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        text = ctk.CTkTextbox(
+            text_frame,
+            fg_color=Colors.INPUT_BG,
+            text_color=Colors.TEXT,
+            font=("Courier", 10)
+        )
+        text.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Add files to text widget
+        for i, file_path in enumerate(self.batch_queue, 1):
+            text.insert("end", f"{i}. {os.path.basename(file_path)}\n")
+            text.insert("end", f"   Path: {file_path}\n\n")
+        
+        text.configure(state="disabled")  # Make read-only
+        
+        # Add close button
+        close_button = ctk.CTkButton(
+            popup,
+            text="Close",
+            command=popup.destroy,
+            width=100
+        )
+        close_button.pack(pady=10)
 
 if __name__ == "__main__":
     root = tk.Tk()
