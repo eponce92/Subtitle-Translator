@@ -3,7 +3,6 @@ from tkinter import ttk
 import customtkinter as ctk
 from tkinter import filedialog
 import json
-import winsound
 from subtitle_processor import SubtitleProcessor
 from translator import GPTTranslator
 import os
@@ -164,15 +163,15 @@ class SubtitleTranslatorApp:
         
         ctk.CTkRadioButton(
             mode_frame,
-            text="File Selection",
+            text="Single File",
             variable=self.batch_mode,
             value=False,
             command=self.toggle_mode
-        ).pack(side="left", padx=30)
+        ).pack(side="left", padx=30)  # More spacing between radio buttons
         
         ctk.CTkRadioButton(
             mode_frame,
-            text="Folder Scan",
+            text="Batch Process Folder",
             variable=self.batch_mode,
             value=True,
             command=self.toggle_mode
@@ -632,9 +631,9 @@ class SubtitleTranslatorApp:
         separator.pack(fill="x", pady=5)
         
     def toggle_mode(self):
-        """Toggle between folder batch mode and file selection mode"""
+        """Toggle between single file and batch mode"""
         is_batch = self.batch_mode.get()
-        self.path_label.configure(text="Folder:" if is_batch else "File(s):")  # Updated label
+        self.path_label.configure(text="Folder:" if is_batch else "Files:")  # Changed to "Files:" for clarity
         self.file_path_var.set("")  # Clear path
         self.batch_info_var.set("")
         self.batch_queue = []  # Clear batch queue
@@ -645,7 +644,7 @@ class SubtitleTranslatorApp:
         else:
             self.batch_progress_frame.pack_forget()
             self.batch_frame.pack_forget()
-
+            
     def browse_path(self):
         """Browse for file or folder depending on mode"""
         if self.batch_mode.get():
@@ -669,16 +668,11 @@ class SubtitleTranslatorApp:
             if file_paths:
                 # Convert tuple to list for batch processing
                 self.batch_queue = list(file_paths)
-                # Show all selected files in the entry with a counter
-                if len(self.batch_queue) == 1:
-                    self.file_path_var.set(self.batch_queue[0])
-                    self.batch_info_var.set("")
-                else:
-                    first_file = os.path.basename(self.batch_queue[0])
-                    self.file_path_var.set(f"{first_file} (+{len(self.batch_queue)-1} more files)")
-                    self.batch_info_var.set(f"Selected {len(self.batch_queue)} files to process")
-                    self.batch_frame.pack(fill="x", pady=5)
-                
+                # Show first file in the entry
+                self.file_path_var.set(self.batch_queue[0])
+                # Update batch info
+                self.batch_info_var.set(f"Selected {len(self.batch_queue)} files to process")
+                self.batch_frame.pack(fill="x", pady=5)
                 # Check first file type
                 self.check_file_type(self.batch_queue[0])
                 self.save_settings()
@@ -932,14 +926,8 @@ class SubtitleTranslatorApp:
         # Update environment variable before starting
         os.environ['OPENAI_API_KEY'] = self.api_key_var.get()
         
-        # Show loading state and play start sound
+        # Show loading state
         self.show_loading()
-        winsound.MessageBeep(winsound.MB_ICONASTERISK)
-        
-        # Show start notification
-        self.show_notification("🚀 Starting Translation", 
-            "Translation process has begun. This may take a while depending on the file size.",
-            "info")
         
         try:
             # Reset batch progress
@@ -971,19 +959,9 @@ class SubtitleTranslatorApp:
         if value == 100:
             self.progress_percent.configure(text_color=Colors.ACCENT)
             
-            # Play completion sound using the correct constant
-            try:
-                winsound.MessageBeep(winsound.MB_ICONASTERISK)
-            except Exception as e:
-                logger.debug(f"Could not play sound: {e}")
-            
             # Only show completion message and re-enable buttons if this is the last file
             if self.current_batch_index >= len(self.batch_queue) - 1:
-                self.show_notification(
-                    "✨ Translation Complete",
-                    "All files have been translated successfully!",
-                    "success"
-                )
+                self.flash_status("✅ All files completed successfully!")
                 self.translate_button.configure(state="normal")
                 self.cancel_button.configure(state="disabled")
             else:
@@ -1334,47 +1312,6 @@ class SubtitleTranslatorApp:
                 
         except Exception as e:
             self.show_error("Error adjusting subtitle timing", e)
-
-    def show_notification(self, title, message, type_="info"):
-        """Show a popup notification"""
-        popup = tk.Toplevel(self.root)
-        popup.title(title)
-        popup.geometry("400x150")
-        popup.configure(bg=Colors.FRAME_BG)
-        
-        # Center the popup on the screen
-        popup.transient(self.root)
-        popup.grab_set()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 150) // 2
-        popup.geometry(f"+{x}+{y}")
-        
-        # Add message
-        message_frame = ctk.CTkFrame(popup, fg_color=Colors.FRAME_BG)
-        message_frame.pack(expand=True, fill="both", padx=20, pady=20)
-        
-        # Icon based on type
-        icon = "✅" if type_ == "success" else "ℹ️" if type_ == "info" else "❌"
-        
-        ctk.CTkLabel(
-            message_frame,
-            text=f"{icon} {message}",
-            font=ctk.CTkFont(size=14),
-            text_color=Colors.TEXT,
-            wraplength=350
-        ).pack(pady=10)
-        
-        # Add OK button
-        ctk.CTkButton(
-            message_frame,
-            text="OK",
-            command=popup.destroy,
-            width=100
-        ).pack(pady=10)
-        
-        # Auto-close after 3 seconds for success/info notifications
-        if type_ in ["success", "info"]:
-            popup.after(3000, popup.destroy)
 
 if __name__ == "__main__":
     root = tk.Tk()
