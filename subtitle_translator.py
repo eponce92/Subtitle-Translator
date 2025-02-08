@@ -3,6 +3,7 @@ from tkinter import ttk
 import customtkinter as ctk
 from tkinter import filedialog
 import json
+import winsound
 from subtitle_processor import SubtitleProcessor
 from translator import GPTTranslator
 import os
@@ -931,8 +932,14 @@ class SubtitleTranslatorApp:
         # Update environment variable before starting
         os.environ['OPENAI_API_KEY'] = self.api_key_var.get()
         
-        # Show loading state
+        # Show loading state and play start sound
         self.show_loading()
+        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        
+        # Show start notification
+        self.show_notification("🚀 Starting Translation", 
+            "Translation process has begun. This may take a while depending on the file size.",
+            "info")
         
         try:
             # Reset batch progress
@@ -964,9 +971,16 @@ class SubtitleTranslatorApp:
         if value == 100:
             self.progress_percent.configure(text_color=Colors.ACCENT)
             
+            # Play completion sound
+            winsound.MessageBeep(winsound.MB_ICONINFORMATION)
+            
             # Only show completion message and re-enable buttons if this is the last file
             if self.current_batch_index >= len(self.batch_queue) - 1:
-                self.flash_status("✅ All files completed successfully!")
+                self.show_notification(
+                    "✨ Translation Complete",
+                    "All files have been translated successfully!",
+                    "success"
+                )
                 self.translate_button.configure(state="normal")
                 self.cancel_button.configure(state="disabled")
             else:
@@ -1317,6 +1331,47 @@ class SubtitleTranslatorApp:
                 
         except Exception as e:
             self.show_error("Error adjusting subtitle timing", e)
+
+    def show_notification(self, title, message, type_="info"):
+        """Show a popup notification"""
+        popup = tk.Toplevel(self.root)
+        popup.title(title)
+        popup.geometry("400x150")
+        popup.configure(bg=Colors.FRAME_BG)
+        
+        # Center the popup on the screen
+        popup.transient(self.root)
+        popup.grab_set()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 150) // 2
+        popup.geometry(f"+{x}+{y}")
+        
+        # Add message
+        message_frame = ctk.CTkFrame(popup, fg_color=Colors.FRAME_BG)
+        message_frame.pack(expand=True, fill="both", padx=20, pady=20)
+        
+        # Icon based on type
+        icon = "✅" if type_ == "success" else "ℹ️" if type_ == "info" else "❌"
+        
+        ctk.CTkLabel(
+            message_frame,
+            text=f"{icon} {message}",
+            font=ctk.CTkFont(size=14),
+            text_color=Colors.TEXT,
+            wraplength=350
+        ).pack(pady=10)
+        
+        # Add OK button
+        ctk.CTkButton(
+            message_frame,
+            text="OK",
+            command=popup.destroy,
+            width=100
+        ).pack(pady=10)
+        
+        # Auto-close after 3 seconds for success/info notifications
+        if type_ in ["success", "info"]:
+            popup.after(3000, popup.destroy)
 
 if __name__ == "__main__":
     root = tk.Tk()
