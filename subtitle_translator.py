@@ -971,8 +971,11 @@ class SubtitleTranslatorApp:
         if value == 100:
             self.progress_percent.configure(text_color=Colors.ACCENT)
             
-            # Play completion sound
-            winsound.MessageBeep(winsound.MB_ICONINFORMATION)
+            # Play completion sound using the correct constant
+            try:
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            except Exception as e:
+                logger.debug(f"Could not play sound: {e}")
             
             # Only show completion message and re-enable buttons if this is the last file
             if self.current_batch_index >= len(self.batch_queue) - 1:

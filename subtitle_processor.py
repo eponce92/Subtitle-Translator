@@ -39,6 +39,10 @@ class SubtitleProcessor:
         self.overlap = 0  # No overlap needed with new context handling
         self.progress_lock = Lock()
         self.total_progress = 0
+        self.completed_batches = 0
+        self.total_batches = 0
+        self.processed_subtitles = 0
+        self.total_subtitles = 0
         logger.debug(f"Initialized SubtitleProcessor with file: {file_path}")
         
     def translate(self):
@@ -48,11 +52,12 @@ class SubtitleProcessor:
         thread.start()
         logger.debug("Started translation thread")
         
-    def _update_progress_safe(self, value):
-        """Thread-safe progress update"""
+    def _update_progress_safe(self, processed_count):
+        """Thread-safe progress update based on processed subtitles"""
         with self.progress_lock:
-            self.total_progress = min(100, max(self.total_progress, value))
-            self.progress_callback(self.total_progress)
+            self.processed_subtitles += processed_count
+            progress = (self.processed_subtitles / self.total_subtitles) * 100
+            self.progress_callback(min(100, progress))
             
     def _get_language_code(self, language):
         """Get the ISO 639-1/2 language code"""
@@ -89,7 +94,7 @@ class SubtitleProcessor:
         """Translate a batch of texts with retry logic"""
         return self.translator.translate(batch_texts, self.target_language)
         
-    def _process_subtitle_batch(self, batch, total_subs):
+    def _process_subtitle_batch(self, batch, batch_index):
         """Process a batch of subtitles"""
         try:
             # Clean texts before translation
@@ -98,9 +103,16 @@ class SubtitleProcessor:
             # Translate the batch
             translated_texts = self._translate_batch(batch_texts)
             
-            # Update progress based on batch size
-            progress = (len(batch) / total_subs) * 100
-            self._update_progress_safe(progress)
+            # Update progress based on number of subtitles in this batch
+            self._update_progress_safe(len(batch))
+            
+            # Update status with more detailed information
+            with self.progress_lock:
+                self.completed_batches += 1
+                self.status_callback(
+                    f"Completed batch {self.completed_batches}/{self.total_batches} "
+                    f"({self.processed_subtitles}/{self.total_subtitles} subtitles)"
+                )
             
             return list(zip(batch, translated_texts))
             
@@ -132,15 +144,7 @@ class SubtitleProcessor:
             
             if subs is None:
                 raise Exception("Failed to load subtitle file with any supported encoding")
-                
-            # Clean subtitle texts before translation
-            for sub in subs:
-                sub.text = self._clean_subtitle_text(sub.text)
-            
-            # Store original file path to delete later
-            original_english_file = self.file_path
-            is_extracted_file = "_stream_" in original_english_file
-            
+
             # Apply block limit if specified
             if self.block_limit:
                 total_subs = min(len(subs), self.block_limit)
@@ -150,55 +154,69 @@ class SubtitleProcessor:
                 total_subs = len(subs)
                 logger.debug(f"Processing all {total_subs} subtitles")
             
-            # Create output path with standard naming convention
+            # Initialize progress tracking
+            self.total_subtitles = total_subs
+            self.processed_subtitles = 0
+            
+            # Create output path
             srt_output_path = self._create_subtitle_path(self.file_path)
             logger.debug(f"Will save translated subtitles to: {srt_output_path}")
+
+            # Process subtitles sequentially in batches
+            translated_subs = []
+            batch_size = self.batch_size
             
-            # Create empty output file
-            with open(srt_output_path, 'w', encoding='utf-8') as f:
-                f.write("")
-            
-            # Process in parallel batches
-            batches = [subs[i:i + self.batch_size] for i in range(0, total_subs, self.batch_size)]
-            all_results = []
-            
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                future_to_batch = {
-                    executor.submit(self._process_subtitle_batch, batch, total_subs): i 
-                    for i, batch in enumerate(batches)
-                }
+            for start_idx in range(0, total_subs, batch_size):
+                if self.cancel_flag:
+                    logger.info("Translation cancelled by user")
+                    self.status_callback("Translation cancelled")
+                    return
+
+                end_idx = min(start_idx + batch_size, total_subs)
+                batch = subs[start_idx:end_idx]
                 
-                # Process results as they complete
-                for future in as_completed(future_to_batch):
-                    if self.cancel_flag:
-                        executor.shutdown(wait=False)
-                        logger.info("Translation cancelled by user")
-                        self.status_callback("Translation cancelled")
-                        return
-                        
-                    batch_idx = future_to_batch[future]
-                    try:
-                        batch_results = future.result()
-                        all_results.extend(batch_results)
-                        
-                        # Update status
-                        progress = ((batch_idx + 1) / len(batches)) * 100
-                        self.status_callback(
-                            f"Processed batch {batch_idx + 1}/{len(batches)} "
-                            f"({len(all_results)}/{total_subs} subtitles)"
+                # Clean and prepare batch texts
+                batch_texts = []
+                for sub in batch:
+                    cleaned_text = self._clean_subtitle_text(sub.text)
+                    # Add context about timing to help maintain order
+                    batch_texts.append(f"[{sub.index}] {cleaned_text}")
+                
+                try:
+                    # Translate the batch
+                    translated_texts = self._translate_batch(batch_texts)
+                    
+                    # Process translated texts and maintain original properties
+                    for i, (sub, trans_text) in enumerate(zip(batch, translated_texts)):
+                        # Remove the index prefix we added
+                        trans_text = re.sub(r'^\[\d+\]\s*', '', trans_text)
+                        # Create a new subtitle object with original timing
+                        new_sub = pysrt.SubRipItem(
+                            index=sub.index,
+                            start=sub.start,
+                            end=sub.end,
+                            text=trans_text
                         )
-                        
-                    except Exception as e:
-                        logger.error(f"Batch {batch_idx} failed: {str(e)}")
-                        raise
+                        translated_subs.append(new_sub)
+                    
+                    # Update progress
+                    self._update_progress_safe(len(batch))
+                    self.completed_batches += 1
+                    self.status_callback(
+                        f"Completed batch {self.completed_batches}/{(total_subs + batch_size - 1) // batch_size} "
+                        f"({self.processed_subtitles}/{self.total_subtitles} subtitles)"
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Error processing batch {start_idx//batch_size}: {str(e)}")
+                    raise
             
-            # Sort results by original subtitle index
-            all_results.sort(key=lambda x: x[0].index)
+            # Sort subtitles by index to ensure correct order
+            translated_subs.sort(key=lambda x: x.index)
             
-            # Write all results to file
+            # Write to file
             with open(srt_output_path, 'w', encoding='utf-8') as f:
-                for sub, translated_text in all_results:
-                    sub.text = translated_text
+                for sub in translated_subs:
                     f.write(f"{sub.index}\n")
                     f.write(f"{sub.start} --> {sub.end}\n")
                     f.write(f"{sub.text}\n\n")
@@ -206,12 +224,12 @@ class SubtitleProcessor:
             # Final status update
             logger.info(f"Translation completed. Saved to: {srt_output_path}")
             self.status_callback(f"Translation completed successfully! Saved to: {srt_output_path}")
-            self._update_progress_safe(100)
+            self.progress_callback(100)  # Ensure we reach 100%
             
         except Exception as e:
             logger.exception("Translation process failed:")
             self.status_callback(f"Error: {str(e)}")
-            raise 
+            raise
 
     def adjust_timing(self, srt_file_path, time_delta_ms):
         """Adjust subtitle timings by a given number of milliseconds"""
