@@ -27,8 +27,10 @@ class JellyfinRenamer:
         patterns_to_remove = [
             r'_stream_\d+',  # Remove stream numbers
             r'_Spanish',     # Remove language suffix
-            r'\.eng$',       # Remove .eng extension
-            r'\.spa$'        # Remove .spa extension
+            r'\.eng(?=\.)',  # Remove .eng when followed by a dot
+            r'\.spa(?=\.)',  # Remove .spa when followed by a dot
+            r'\.eng$',       # Remove .eng at end
+            r'\.spa$'        # Remove .spa at end
         ]
         
         base = filename
